@@ -136,9 +136,9 @@ pub const Radio = struct {
         return .{};
     }
 
-    pub fn recv(_: Radio, packets: []RxPacket) !usize {
-        const len = c.lgw_receive(@intCast(packets.len), packets.ptr);
-        return if (len < 0) return error.RecvFailed else @intCast(len);
+    pub fn recv(_: Radio, buffer: []RxPacket) ![]RxPacket {
+        const len = c.lgw_receive(@intCast(buffer.len), buffer.ptr);
+        return if (len < 0) return error.RecvFailed else buffer[0..@intCast(len)];
     }
 
     pub fn deinit(_: Radio) void {

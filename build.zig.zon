@@ -1,6 +1,6 @@
 .{
     .name = .zloragw,
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{
         .sx1302_hal = .{
             .url = "git+https://github.com/Lora-net/sx1302_hal.git#4b42025d1751e04632c0b04160e0d29dbbb222a5",
