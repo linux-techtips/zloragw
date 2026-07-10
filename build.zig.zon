@@ -1,0 +1,13 @@
+.{
+    .name = .zloragw,
+    .version = "0.0.1",
+    .dependencies = .{
+        .sx1302_hal = .{
+            .url = "git+https://github.com/Lora-net/sx1302_hal.git#4b42025d1751e04632c0b04160e0d29dbbb222a5",
+            .hash = "N-V-__8AAD3aGgClOq6f0IXK4njpna1gqLcnLyHEO252p1aG",
+        },
+    },
+    .minimum_zig_version = "0.16.0",
+    .paths = .{ "loragw.zig", "build.zig", "build.zig.zon" },
+    .fingerprint = 0xdddeaf59a8f58285,
+}
