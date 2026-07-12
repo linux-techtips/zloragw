@@ -8,8 +8,6 @@ const log = std.log.scoped(.loragw);
 const posix = std.posix;
 
 pub const Gps = struct {
-    var claimed: std.atomic.Value(bool) = .init(false);
-
     pub const Config = struct {
         path: [:0]const u8,
         baud: posix.speed_t = .B9600,
@@ -19,12 +17,7 @@ pub const Gps = struct {
     restore: posix.termios,
 
     pub fn init(io: std.Io, config: Config) !Gps {
-        if (claimed.cmpxchgStrong(false, true, .acquire, .monotonic)) |_| {
-            return error.Claimed;
-        }
-        errdefer claimed.store(false, .release);
-
-        const file = try std.Io.Dir.openFileAbsolute(io, config.path, .{ .lock = .exclusive, .mode = .read_write });
+        const file = try std.Io.Dir.openFileAbsolute(io, config.path, .{ .mode = .read_write });
         errdefer file.close(io);
 
         const restore = try posix.tcgetattr(file.handle);
@@ -78,8 +71,6 @@ pub const Gps = struct {
         };
 
         gps.file.close(io);
-
-        claimed.store(false, .release);
     }
 
     const ubx = struct {
