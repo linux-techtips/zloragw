@@ -5,6 +5,8 @@ const c = @cImport({
 });
 
 pub const Radio = struct {
+    var claimed: std.atomic.Value(bool) = .init(false);
+
     pub const Config = struct {
         pub const Com = union(Tag) {
             pub const Tag = enum(c_uint) {
@@ -57,8 +59,8 @@ pub const Radio = struct {
             chip: u8,
             offset: Freq,
             bandwidth: Bandwidth = .undefined,
-            spreading_factor: SpreadingFactor = .undefined,
-            coding_rate: CodingRate = .undefined,
+            datarate: Datarate = .undefined,
+            coderate: Coderate = .undefined,
             sync_size: u8 = 0,
             sync_word: u64 = 0,
         };
@@ -76,6 +78,12 @@ pub const Radio = struct {
     };
 
     pub fn init(config: Config) !Radio {
+        if (claimed.cmpxchgStrong(false, true, .acquire, .monotonic)) |_| {
+            return error.Claimed;
+        }
+
+        errdefer claimed.store(false, .release);
+
         var board: c.lgw_conf_board_s = .{
             .lorawan_public = config.board.lorawan_public,
             .full_duplex = config.board.full_duplex,
@@ -142,7 +150,8 @@ pub const Radio = struct {
     }
 
     pub fn deinit(_: Radio) void {
-        std.debug.assert(c.lgw_stop() == c.LGW_HAL_SUCCESS);
+        _ = c.lgw_stop();
+        claimed.store(false, .release);
     }
 
     pub const Freq = struct {
@@ -207,8 +216,8 @@ pub const Radio = struct {
         _,
     };
 
-    pub const CodingRate = enum(u8) {
-        pub const @"undefined": CodingRate = @enumFromInt(c.CR_UNDEFINED);
+    pub const Coderate = enum(u8) {
+        pub const @"undefined": Coderate = @enumFromInt(c.CR_UNDEFINED);
 
         @"45" = c.CR_LORA_4_5,
         @"46" = c.CR_LORA_4_6,
@@ -217,8 +226,8 @@ pub const Radio = struct {
         _,
     };
 
-    pub const SpreadingFactor = enum(u8) {
-        pub const @"undefined": SpreadingFactor = @enumFromInt(c.DR_UNDEFINED);
+    pub const Datarate = enum(u8) {
+        pub const @"undefined": Datarate = @enumFromInt(c.DR_UNDEFINED);
 
         @"7" = c.DR_LORA_SF7,
         @"8" = c.DR_LORA_SF8,
