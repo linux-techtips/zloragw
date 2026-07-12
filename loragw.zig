@@ -4,6 +4,126 @@ const c = @cImport({
     @cInclude("loragw_hal.h");
 });
 
+const log = std.log.scoped(.loragw);
+const posix = std.posix;
+
+pub const Gps = struct {
+    var claimed: std.atomic.Value(bool) = .init(false);
+
+    pub const Config = struct {
+        path: [:0]const u8,
+        baud: posix.speed_t = .B9600,
+    };
+
+    file: std.Io.File,
+    restore: posix.termios,
+
+    pub fn init(io: std.Io, config: Config) !Gps {
+        if (claimed.cmpxchgStrong(false, true, .acquire, .monotonic)) |_| {
+            return error.Claimed;
+        }
+        errdefer claimed.store(false, .release);
+
+        const file = try std.Io.Dir.openFileAbsolute(io, config.path, .{ .lock = .exclusive, .mode = .read_write });
+        errdefer file.close(io);
+
+        const restore = try posix.tcgetattr(file.handle);
+
+        var tio = restore;
+
+        tio.ispeed = config.baud;
+        tio.ospeed = config.baud;
+
+        tio.cflag.CLOCAL = true;
+        tio.cflag.CREAD = true;
+        tio.cflag.CSIZE = .CS8;
+        tio.cflag.PARENB = false;
+        tio.cflag.CSTOPB = false;
+
+        tio.cflag.CLOCAL = true; // possibly ignore modem control lines
+        tio.cflag.HUPCL = false; // did you just hang up on me?
+
+        tio.iflag.IGNPAR = true;
+        tio.iflag.ICRNL = false;
+        tio.iflag.IGNCR = false;
+        tio.iflag.IXON = false;
+        tio.iflag.IXOFF = false;
+
+        tio.oflag = .{};
+
+        tio.lflag.ICANON = false;
+        tio.lflag.ISIG = false;
+        tio.lflag.IEXTEN = false;
+        tio.lflag.ECHO = false;
+        tio.lflag.ECHOE = false;
+        tio.lflag.ECHOK = false;
+
+        // We let the io interface decide.
+        tio.cc[@intFromEnum(posix.V.MIN)] = 1;
+        tio.cc[@intFromEnum(posix.V.TIME)] = 0;
+
+        try posix.tcsetattr(file.handle, .FLUSH, tio);
+        errdefer posix.tcsetattr(file.handle, .NOW, restore) catch |e| {
+            log.warn("failed to restore tty config: {t}", .{e});
+        };
+
+        try file.writeStreamingAll(io, &ubx.nav_timegps);
+
+        return .{ .file = file, .restore = restore };
+    }
+
+    pub fn deinit(gps: *const Gps, io: std.Io) void {
+        posix.tcsetattr(gps.file.handle, .NOW, gps.restore) catch |e| {
+            log.warn("failed to restore tty config: {t}", .{e});
+        };
+
+        gps.file.close(io);
+
+        claimed.store(false, .release);
+    }
+
+    const ubx = struct {
+        const nav_timegps = blk: {
+            const payload: []const u8 = &.{ 0x01, 0x20, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00 };
+
+            var buf: [payload.len + 8]u8 = undefined;
+            _ = message(0x06, 0x01, payload, &buf).?;
+
+            break :blk buf;
+        };
+
+        fn message(
+            class: u8,
+            id: u8,
+            payload: []const u8,
+            buffer: []u8,
+        ) ?[]const u8 {
+            if (buffer.len < payload.len + 8) return null;
+
+            buffer[0] = 0xB5;
+            buffer[1] = 0x62;
+            buffer[2] = class;
+            buffer[3] = id;
+
+            std.mem.writeInt(u16, buffer[4..6], payload.len, .little);
+            @memcpy(buffer[6..][0..payload.len], payload);
+
+            var ck_a: u8 = 0;
+            var ck_b: u8 = 0;
+
+            for (buffer[2 .. 6 + payload.len]) |byte| {
+                ck_a +%= byte;
+                ck_b +%= ck_a;
+            }
+
+            buffer[6 + payload.len] = ck_a;
+            buffer[7 + payload.len] = ck_b;
+
+            return buffer[0 .. payload.len + 8];
+        }
+    };
+};
+
 pub const Radio = struct {
     var claimed: std.atomic.Value(bool) = .init(false);
 
