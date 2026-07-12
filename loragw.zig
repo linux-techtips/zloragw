@@ -60,7 +60,10 @@ pub const Gps = struct {
             log.warn("failed to restore tty config: {t}", .{e});
         };
 
-        try file.writeStreamingAll(io, &ubx.nav_timegps);
+        const timegps: []const u8 = &.{ 0x01, 0x20, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00 };
+        var buf: [timegps.len + 8]u8 = undefined;
+
+        try file.writeStreamingAll(io, Ubx.message(0x06, 0x01, timegps, &buf).?);
 
         return .{ .file = file, .restore = restore };
     }
@@ -73,16 +76,7 @@ pub const Gps = struct {
         gps.file.close(io);
     }
 
-    const ubx = struct {
-        const nav_timegps = blk: {
-            const payload: []const u8 = &.{ 0x01, 0x20, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00 };
-
-            var buf: [payload.len + 8]u8 = undefined;
-            _ = message(0x06, 0x01, payload, &buf).?;
-
-            break :blk buf;
-        };
-
+    const Ubx = struct {
         fn message(
             class: u8,
             id: u8,
@@ -96,7 +90,7 @@ pub const Gps = struct {
             buffer[2] = class;
             buffer[3] = id;
 
-            std.mem.writeInt(u16, buffer[4..6], payload.len, .little);
+            std.mem.writeInt(u16, buffer[4..6], @intCast(payload.len), .little);
             @memcpy(buffer[6..][0..payload.len], payload);
 
             var ck_a: u8 = 0;
@@ -239,7 +233,7 @@ pub const Radio = struct {
                 .rf_chain = chain.chip,
                 .freq_hz = @intCast(chain.offset.hertz),
                 .bandwidth = @intFromEnum(chain.bandwidth),
-                .datarate = @intFromEnum(chain.spreading_factor),
+                .datarate = @intFromEnum(chain.datarate),
                 .sync_word = chain.sync_word,
                 .sync_word_size = chain.sync_size,
                 // TODO: moar fields
