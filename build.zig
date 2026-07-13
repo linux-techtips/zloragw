@@ -77,6 +77,13 @@ pub fn build(b: *std.Build) !void {
     });
 
     b.installArtifact(loragw_lib);
+
+    const loragw_tst = b.addTest(.{
+        .root_module = loragw_mod,
+        .use_llvm = true,
+    });
+
+    b.step("test", "run unit tests").dependOn(&b.addRunArtifact(loragw_tst).step);
 }
 
 pub const Config = struct {

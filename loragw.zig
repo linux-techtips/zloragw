@@ -77,12 +77,7 @@ pub const Gps = struct {
     }
 
     const Ubx = struct {
-        fn message(
-            class: u8,
-            id: u8,
-            payload: []const u8,
-            buffer: []u8,
-        ) ?[]const u8 {
+        fn message(class: u8, id: u8, payload: []const u8, buffer: []u8) ?[]const u8 {
             if (buffer.len < payload.len + 8) return null;
 
             buffer[0] = 0xB5;
@@ -107,9 +102,93 @@ pub const Gps = struct {
             return buffer[0 .. payload.len + 8];
         }
     };
+
+    pub const Longitude = struct {
+        x: f64,
+
+        pub fn dms(deg: i16, min: u8, sec: f64) !Longitude {
+            if (min >= 60) return error.OutOfRange;
+            if (sec < 0.0 or sec >= 60.0) return error.OutOfRange;
+            if (@abs(deg) > 180) return error.OutOfRange;
+            if (@abs(deg) == 180 and (min != 0 or sec != 0.0)) return error.OutOfRange;
+
+            const sign: f64 = if (deg < 0.0) -1.0 else 1.0;
+            const fdeg: f64 = @abs(@as(f64, @floatFromInt(deg)));
+            const fmin: f64 = @floatFromInt(min);
+
+            return .{ .x = sign * (fdeg + (fmin / 60.0) + (sec / 3600.0)) };
+        }
+
+        pub fn parseNmea(slice: []const u8) !Longitude {
+            if (slice.len < 9) return error.Overflow;
+
+            const deg: f64 = @floatFromInt(try std.fmt.parseInt(u16, slice[0..3], 10));
+            const min: f64 = try std.fmt.parseFloat(f64, slice[3..]);
+
+            if (deg > 180.0) return error.OutOfRange;
+            if (min >= 60.0) return error.OutOfRange;
+
+            return .{ .x = deg + (min / 60.0) };
+        }
+
+        pub fn format(lon: Longitude, writer: *std.Io.Writer) !void {
+            const dir: u8 = if (lon.x >= 0.0) 'E' else 'W';
+            const abs = @abs(lon.x);
+
+            const deg = @trunc(abs);
+            const tot = (abs - deg) * 60.0;
+            const min = @trunc(tot);
+            const sec = (tot - min) * 60.0;
+
+            return writer.print("{d}° {d}' {d:.02}'' {c}", .{ deg, min, sec, dir });
+        }
+    };
+
+    pub const Latitude = struct {
+        y: f64,
+
+        pub fn dms(deg: i16, min: u8, sec: f64) !Latitude {
+            if (min >= 60) return error.OutOfRange;
+            if (sec < 0.0 or sec >= 60.0) return error.OutOfRange;
+            if (@abs(deg) > 90) return error.OutOfRange;
+            if (@abs(deg) == 90 and (min != 0 or sec != 0.0)) return error.OutOfRange;
+
+            const sign: f64 = if (deg < 0.0) -1.0 else 1.0;
+            const fdeg: f64 = @abs(@as(f64, @floatFromInt(deg)));
+            const fmin: f64 = @floatFromInt(min);
+
+            return .{ .y = sign * (fdeg + (fmin / 60.0) + (sec / 3600.0)) };
+        }
+
+        pub fn parseNmea(slice: []const u8) !Longitude {
+            if (slice.len < 8) return error.Overflow;
+
+            const deg: f64 = @floatFromInt(try std.fmt.parseInt(u16, slice[0..2], 10));
+            const min: f64 = try std.fmt.parseFloat(f64, slice[2..]);
+
+            if (deg > 90.0) return error.OutOfRange;
+            if (min >= 60.0) return error.OutOfRange;
+
+            return .{ .x = deg + (min / 60.0) };
+        }
+
+        pub fn format(lat: Latitude, writer: *std.Io.Writer) !void {
+            const dir: u8 = if (lat.y >= 0.0) 'N' else 'S';
+            const abs = @abs(lat.y);
+
+            const deg = @trunc(abs);
+            const tot = (abs - deg) * 60.0;
+            const min = @trunc(tot);
+            const sec = (tot - min) * 60.0;
+
+            return writer.print("{d}° {d}' {d:.02}'' {c}", .{ deg, min, sec, dir });
+        }
+    };
 };
 
 pub const Radio = struct {
+    // NOTE: Semtech for some reason decided to store the radio configuration in global static state.
+    // https://github.com/Lora-net/sx1302_hal/blob/4b42025d1751e04632c0b04160e0d29dbbb222a5/libloragw/src/loragw_hal.c#L116-L200
     var claimed: std.atomic.Value(bool) = .init(false);
 
     pub const Config = struct {
@@ -348,6 +427,52 @@ pub const Radio = struct {
     pub const TxPacket = c.lgw_pkt_tx_s;
 };
 
-comptime {
-    _ = std.testing.refAllDecls(@This());
+test "longitude dms - valid" {
+    {
+        const lon: Gps.Longitude = try .dms(93, 31, 2.35);
+        try std.testing.expectApproxEqAbs(@as(f64, 93.5173), lon.x, 0.0001);
+    }
+    {
+        const lon: Gps.Longitude = try .dms(-93, 31, 2.35);
+        try std.testing.expectApproxEqAbs(@as(f64, -93.5173), lon.x, 0.0001);
+    }
+    {
+        const lon: Gps.Longitude = try .dms(0, 0, 0.00);
+        try std.testing.expectEqual(@as(f64, 0.0), lon.x);
+    }
+}
+
+test "longitude dms - invalid" {
+    try std.testing.expectError(error.OutOfRange, Gps.Longitude.dms(181, 0, 0.0));
+    try std.testing.expectError(error.OutOfRange, Gps.Longitude.dms(-181, 0, 0.0));
+
+    try std.testing.expectError(error.OutOfRange, Gps.Longitude.dms(90, 60, 0.0));
+
+    try std.testing.expectError(error.OutOfRange, Gps.Longitude.dms(90, 0, 60.0));
+    try std.testing.expectError(error.OutOfRange, Gps.Longitude.dms(90, 0, -0.1));
+}
+
+test "latitude dms - valid" {
+    {
+        const lat: Gps.Latitude = try .dms(44, 58, 10.0);
+        try std.testing.expectApproxEqAbs(@as(f64, 44.9694), lat.y, 0.0001);
+    }
+    {
+        const lat: Gps.Latitude = try .dms(-44, 58, 10.0);
+        try std.testing.expectApproxEqAbs(@as(f64, -44.9694), lat.y, 0.0001);
+    }
+    {
+        const lat: Gps.Latitude = try .dms(0, 0, 0.00);
+        try std.testing.expectEqual(@as(f64, 0.0), lat.y);
+    }
+}
+
+test "latitude dms - invalid" {
+    try std.testing.expectError(error.OutOfRange, Gps.Latitude.dms(181, 0, 0.0));
+    try std.testing.expectError(error.OutOfRange, Gps.Latitude.dms(-181, 0, 0.0));
+
+    try std.testing.expectError(error.OutOfRange, Gps.Latitude.dms(90, 60, 0.0));
+
+    try std.testing.expectError(error.OutOfRange, Gps.Latitude.dms(90, 0, 60.0));
+    try std.testing.expectError(error.OutOfRange, Gps.Latitude.dms(90, 0, -0.1));
 }
