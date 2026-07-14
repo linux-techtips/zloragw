@@ -419,7 +419,15 @@ pub const Radio = struct {
         @"10" = c.DR_LORA_SF10,
         @"11" = c.DR_LORA_SF11,
         @"12" = c.DR_LORA_SF12,
+        _,
+    };
 
+    pub const CRCStatus = enum(u8) {
+        pub const @"undefined": CRCStatus = @enumFromInt(c.STAT_UNDEFINED);
+
+        none = c.STAT_NO_CRC,
+        bad = c.STAT_CRC_BAD,
+        ok = c.STAT_CRC_OK,
         _,
     };
 
