@@ -89,6 +89,7 @@ pub fn build(b: *std.Build) !void {
 pub const Config = struct {
     sanitize_c: std.zig.SanitizeC = .off,
     linkage: std.builtin.LinkMode = .static,
+    disable_printf: bool = false,
     debug_hal: bool = false,
     debug_reg: bool = false,
     debug_spi: bool = false,
@@ -113,8 +114,13 @@ pub const Config = struct {
         \\#define DEBUG_GPS  {d}
         \\#define DEBUG_LBT  {d}
         \\#define DEBUG_I2C  {d}
-        \\#define DEBUG_COM {d}
+        \\#define DEBUG_COM  {d}
         \\#define DEBUG_GPIO {d}
+        \\
+        \\/* Disable printf guard */
+        \\#if {d}
+        \\ #define printf(...) (void)(0)
+        \\#endif
         \\
         \\#endif /* _LORAGW_CONFIG_H */
     );
@@ -146,6 +152,7 @@ pub const Config = struct {
             @intFromBool(config.debug_i2c),
             @intFromBool(config.debug_com),
             @intFromBool(config.debug_gpio),
+            @intFromBool(config.disable_printf),
         });
     }
 };
