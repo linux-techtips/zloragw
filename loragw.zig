@@ -329,8 +329,14 @@ pub const Radio = struct {
     }
 
     pub fn recv(_: Radio, buffer: []RxPacket) ![]RxPacket {
-        const len = c.lgw_receive(@intCast(buffer.len), buffer.ptr);
-        return if (len < 0) return error.RecvFailed else buffer[0..@intCast(len)];
+        const rc = c.lgw_receive(@intCast(buffer.len), buffer.ptr);
+
+        return switch (std.posix.errno(rc)) {
+            .SUCCESS => buffer[0..@intCast(rc)],
+            .IO => return error.Disconnected,
+            // TODO: errno is not guaranteed to be set to a valid value if lgw_receive fails.
+            else => return error.RecvFailed,
+        };
     }
 
     pub fn deinit(_: Radio) void {
