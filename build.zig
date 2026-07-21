@@ -16,7 +16,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .target = target,
         .link_libc = true,
-        .sanitize_c = config.sanitize_c,
     });
 
     const config_file = b.addWriteFile("config.h", config.header(b));
@@ -87,7 +86,6 @@ pub fn build(b: *std.Build) !void {
 }
 
 pub const Config = struct {
-    sanitize_c: std.zig.SanitizeC = .off,
     linkage: std.builtin.LinkMode = .static,
     disable_printf: bool = false,
     debug_hal: bool = false,

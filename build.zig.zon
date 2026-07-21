@@ -2,9 +2,12 @@
     .name = .zloragw,
     .version = "0.0.5",
     .dependencies = .{
+        // .sx1302_hal = .{
+        //     .url = "git+https://github.com/linux-techtips/sx1302_hal?ref=patches#7d01009cc31c84842d3a9a2bc11121fb1a7d14a7",
+        //     .hash = "N-V-__8AAB3bGgCZ8lHyyN2m_prZY48aQ9X4yAzExlgGrFBf",
+        // },
         .sx1302_hal = .{
-            .url = "git+https://github.com/linux-techtips/sx1302_hal?ref=patches#7d01009cc31c84842d3a9a2bc11121fb1a7d14a7",
-            .hash = "N-V-__8AAB3bGgCZ8lHyyN2m_prZY48aQ9X4yAzExlgGrFBf",
+            .path = "../../Forks/sx1302_hal",
         },
     },
     .minimum_zig_version = "0.16.0",
