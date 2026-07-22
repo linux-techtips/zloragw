@@ -287,135 +287,141 @@ pub const nmea = struct {
             break :init std.StaticStringMap(Tag).initComptime(list);
         };
     };
-};
 
-pub const RMC = struct {
-    // TODO: we should always have a status.
-    status: ?enum { valid, warning } = null,
-    time: ?std.Io.Timestamp = null,
-    date: ?std.Io.Timestamp = null,
-    location: ?Gps.Location = null,
+    pub const RMC = struct {
+        // TODO: we should always have a status.
+        status: ?enum { valid, warning } = null,
+        time: ?std.Io.Timestamp = null,
+        date: ?std.Io.Timestamp = null,
+        location: ?Gps.Location = null,
 
-    pub fn parse(buffer: []const u8) !RMC {
-        var rmc: RMC = .{};
+        pub fn parse(buffer: []const u8) !RMC {
+            var rmc: RMC = .{};
 
-        var it = std.mem.splitScalar(u8, buffer, ',');
+            var it = std.mem.splitScalar(u8, buffer, ',');
 
-        var state: enum {
-            time,
-            status,
-            lat,
-            lat_dir,
-            lon,
-            lon_dir,
-            speed_knots,
-            heading,
-            date,
-        } = .time;
+            var state: enum {
+                time,
+                status,
+                lat,
+                lat_dir,
+                lon,
+                lon_dir,
+                speed_knots,
+                heading,
+                date,
+            } = .time;
 
-        var lat: ?Gps.Latitude = null;
-        var lon: ?Gps.Longitude = null;
+            var lat: ?Gps.Latitude = null;
+            var lon: ?Gps.Longitude = null;
 
-        while (it.next()) |slice| switch (state) {
-            .time => {
-                state = .status;
-                // TODO: we need to handle having a non-empty column but invalid time.
-                if (slice.len < 6) continue;
+            while (it.next()) |slice| switch (state) {
+                .time => {
+                    state = .status;
+                    // TODO: we need to handle having a non-empty column but invalid time.
+                    if (slice.len < 6) continue;
 
-                // TODO: let's just hope that we have digits.
-                const h: i96 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
-                const m: i96 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
-                const s: i96 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
+                    // TODO: let's just hope that we have digits.
+                    const h: i96 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
+                    const m: i96 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
+                    const s: i96 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
 
-                const millis = if (slice.len >= 6 and slice[6] == '.')
-                    try std.fmt.parseInt(i96, slice[7..], 10)
-                else
-                    0;
+                    const millis = if (slice.len >= 6 and slice[6] == '.')
+                        try std.fmt.parseInt(i96, slice[7..], 10)
+                    else
+                        0;
 
-                rmc.time = .{ .nanoseconds = (h * std.time.ns_per_hour) + (m * std.time.ns_per_min) + (s * std.time.ns_per_s) + (millis * std.time.ns_per_ms) };
-            },
-            .status => {
-                state = .lat;
-                if (slice.len == 0) return error.MissingStatus;
+                    rmc.time = .{ .nanoseconds = (h * std.time.ns_per_hour) + (m * std.time.ns_per_min) + (s * std.time.ns_per_s) + (millis * std.time.ns_per_ms) };
+                },
+                .status => {
+                    state = .lat;
+                    if (slice.len == 0) return error.MissingStatus;
 
-                rmc.status = switch (slice[0]) {
-                    'V' => .warning,
-                    'A' => .valid,
-                    else => null,
-                };
-            },
-            .lat => {
-                state = .lat_dir;
-                if (slice.len == 0) continue;
+                    rmc.status = switch (slice[0]) {
+                        'V' => .warning,
+                        'A' => .valid,
+                        else => null,
+                    };
+                },
+                .lat => {
+                    state = .lat_dir;
+                    if (slice.len == 0) continue;
 
-                lat = try Gps.Latitude.parse(slice);
-            },
-            .lat_dir => {
-                state = .lon;
-                if (slice.len == 0) {
-                    if (lat != null) return error.InvalidDirection;
-                    continue;
-                }
+                    lat = try Gps.Latitude.parse(slice);
+                },
+                .lat_dir => {
+                    state = .lon;
+                    if (slice.len == 0) {
+                        if (lat != null) return error.InvalidDirection;
+                        continue;
+                    }
 
-                lat.?.y *= switch (slice[0]) {
-                    'S' => -1.0,
-                    'N' => 1.0,
-                    else => return error.InvalidDirection,
-                };
-            },
-            .lon => {
-                state = .lon_dir;
-                if (slice.len == 0) continue;
+                    lat.?.y *= switch (slice[0]) {
+                        'S' => -1.0,
+                        'N' => 1.0,
+                        else => return error.InvalidDirection,
+                    };
+                },
+                .lon => {
+                    state = .lon_dir;
+                    if (slice.len == 0) continue;
 
-                lon = try Gps.Longitude.parse(slice);
-            },
-            .lon_dir => {
-                state = .speed_knots;
-                if (slice.len == 0) {
-                    if (lon != null) return error.InvalidDirection;
-                    continue;
-                }
+                    lon = try Gps.Longitude.parse(slice);
+                },
+                .lon_dir => {
+                    state = .speed_knots;
+                    if (slice.len == 0) {
+                        if (lon != null) return error.InvalidDirection;
+                        continue;
+                    }
 
-                lon.?.x *= switch (slice[0]) {
-                    'W' => -1.0,
-                    'E' => 1.0,
-                    else => return error.InvalidDirection,
-                };
-            },
-            .speed_knots => {
-                // TODO: this should probably go in .lon_dir.
-                if ((lat == null) != (lon == null)) {
-                    return error.InvalidDirection;
-                } else if (lat != null and lon != null) {
-                    rmc.location = .{ .lat = lat.?, .lon = lon.? };
-                }
+                    lon.?.x *= switch (slice[0]) {
+                        'W' => -1.0,
+                        'E' => 1.0,
+                        else => return error.InvalidDirection,
+                    };
+                },
+                .speed_knots => {
+                    // TODO: this should probably go in .lon_dir.
+                    if ((lat == null) != (lon == null)) {
+                        return error.InvalidDirection;
+                    } else if (lat != null and lon != null) {
+                        rmc.location = .{ .lat = lat.?, .lon = lon.? };
+                    }
 
-                // TODO: implement.
-                state = .heading;
-            },
-            .heading => {
-                // TODO: implement.
-                state = .date;
-            },
-            .date => {
-                // TODO: there are more fields after this.
-                if (slice.len == 0) break;
-                if (slice.len != 6) return error.InvalidUTCDate;
+                    // TODO: implement.
+                    state = .heading;
+                },
+                .heading => {
+                    // TODO: implement.
+                    state = .date;
+                },
+                .date => {
+                    // TODO: there are more fields after this.
+                    if (slice.len == 0) break;
+                    if (slice.len != 6) return error.InvalidUTCDate;
 
-                // TODO: let's just hope we have digits.
-                const y: u16 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
-                const m: u4 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
-                const d: u5 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
+                    // TODO: let's just hope we have digits.
+                    const y: u16 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
+                    const m: u4 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
+                    const d: u5 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
 
-                rmc.date = .{
-                    // NOTE: we only handle years after 2000. This is because we do not live in the 90s anymore.
-                    .nanoseconds = @intCast(daysSinceEpoch(y + 2000, @enumFromInt(m), d) * std.time.ns_per_day),
-                };
-            },
-        };
+                    rmc.date = .{
+                        // NOTE: we only handle years after 2000. This is because we do not live in the 90s anymore.
+                        .nanoseconds = @intCast(daysSinceEpoch(y + 2000, @enumFromInt(m), d) * std.time.ns_per_day),
+                    };
+                },
+            };
 
-        return rmc;
-    }
+            return rmc;
+        }
+    };
+
+    pub const Fix = struct {
+        lat: Gps.Latitude,
+        lon: Gps.Longitude,
+        utc: UTC,
+    };
 };
 
 fn daysSinceEpoch(year: std.time.epoch.Year, month: std.time.epoch.Month, days: u5) u64 {
@@ -436,6 +442,28 @@ fn daysSinceEpoch(year: std.time.epoch.Year, month: std.time.epoch.Month, days: 
 
     return era * 146097 + doe - 719468;
 }
+
+pub const UTC = struct {
+    seconds: u64,
+
+    pub fn format(utc: UTC, writer: *std.Io.Writer) !void {
+        const epoch_sec: std.time.epoch.EpochSeconds = .{ .secs = utc.seconds };
+        const epoch_day = epoch_sec.getEpochDay();
+
+        const day_secs = epoch_sec.getDaySeconds();
+        const year_day = epoch_day.calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+
+        try writer.print("{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+            year_day.year,
+            month_day.month.numeric(),
+            month_day.day_index + 1,
+            day_secs.getHoursIntoDay(),
+            day_secs.getMinutesIntoHour(),
+            day_secs.getSecondsIntoMinute(),
+        });
+    }
+};
 
 pub const Radio = struct {
     // NOTE: Semtech for some reason decided to store the radio configuration in global static state.
