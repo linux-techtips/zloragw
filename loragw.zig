@@ -195,216 +195,246 @@ const ubx = struct {
 // TODO: (Carter) This is more of a namespace than a struct. It should probably even be in a separate package.
 pub const nmea = struct {
     // REFERENCE: https://aprs.gids.nl/nmea/
-
-    pub const Sentence = union(enum) {
-        pub const Tag = std.meta.Tag(Sentence);
-
-        pub const GPRMC = struct {
-            // TODO: we should always have a status.
-            status: ?enum { valid, warning } = null,
-            time: ?std.Io.Timestamp = null,
-            date: ?std.Io.Timestamp = null,
-            location: ?Gps.Location = null,
-
-            pub fn parse(buffer: []const u8) !GPRMC {
-                var gprmc: GPRMC = .{};
-
-                var it = std.mem.splitScalar(u8, buffer, ',');
-
-                var state: enum {
-                    time,
-                    status,
-                    lat,
-                    lat_dir,
-                    lon,
-                    lon_dir,
-                    speed_knots,
-                    heading,
-                    date,
-                } = .time;
-
-                var lat: ?Gps.Latitude = null;
-                var lon: ?Gps.Longitude = null;
-
-                while (it.next()) |slice| switch (state) {
-                    .time => {
-                        state = .status;
-                        // TODO: we need to handle having a non-empty column but invalid time.
-                        if (slice.len < 6) continue;
-
-                        // TODO: let's just hope that we have digits.
-                        const h: i96 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
-                        const m: i96 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
-                        const s: i96 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
-
-                        const millis = if (slice.len >= 6 and slice[6] == '.')
-                            try std.fmt.parseInt(i96, slice[7..], 10)
-                        else
-                            0;
-
-                        gprmc.time = .{ .nanoseconds = (h * std.time.ns_per_hour) + (m * std.time.ns_per_min) + (s * std.time.ns_per_s) + (millis * std.time.ns_per_ms) };
-                    },
-                    .status => {
-                        state = .lat;
-                        if (slice.len == 0) return error.MissingStatus;
-
-                        gprmc.status = switch (slice[0]) {
-                            'V' => .warning,
-                            'A' => .valid,
-                            else => null,
-                        };
-                    },
-                    .lat => {
-                        state = .lat_dir;
-                        if (slice.len == 0) continue;
-
-                        lat = try Gps.Latitude.parse(slice);
-                    },
-                    .lat_dir => {
-                        state = .lon;
-                        if (slice.len == 0) {
-                            if (lat != null) return error.InvalidDirection;
-                            continue;
-                        }
-
-                        lat.?.y *= switch (slice[0]) {
-                            'S' => -1.0,
-                            'N' => 1.0,
-                            else => return error.InvalidDirection,
-                        };
-                    },
-                    .lon => {
-                        state = .lon_dir;
-                        if (slice.len == 0) continue;
-
-                        lon = try Gps.Longitude.parse(slice);
-                    },
-                    .lon_dir => {
-                        state = .speed_knots;
-                        if (slice.len == 0) {
-                            if (lon != null) return error.InvalidDirection;
-                            continue;
-                        }
-
-                        lon.?.x *= switch (slice[0]) {
-                            'W' => -1.0,
-                            'E' => 1.0,
-                            else => return error.InvalidDirection,
-                        };
-                    },
-                    .speed_knots => {
-                        // TODO: this should probably go in .lon_dir.
-                        if ((lat == null) != (lon == null)) {
-                            return error.InvalidDirection;
-                        } else if (lat != null and lon != null) {
-                            gprmc.location = .{ .lat = lat.?, .lon = lon.? };
-                        }
-
-                        // TODO: implement.
-                        state = .heading;
-                    },
-                    .heading => {
-                        // TODO: implement.
-                        state = .date;
-                    },
-                    .date => {
-                        // TODO: there are more fields after this.
-                        if (slice.len == 0) break;
-                        if (slice.len != 6) return error.InvalidUTCDate;
-
-                        // TODO: let's just hope we have digits.
-                        const y: u16 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
-                        const m: u4 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
-                        const d: u5 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
-
-                        gprmc.date = .{
-                            // NOTE: we only handle years after 2000. This is because we do not live in the 90s anymore.
-                            .nanoseconds = @intCast(daysSinceEpoch(y + 2000, @enumFromInt(m), d) * std.time.ns_per_day),
-                        };
-                    },
-                };
-
-                return gprmc;
-            }
-        };
-
-        gpbod: void,
-        gpbwc: void,
-        gpgga: void,
-        gpgll: void,
-        gpgsa: void,
-        gpgsv: void,
-        gphdt: void,
-        gpr00: void,
-        gprma: void,
-        gprmb: void,
-        gprmc: GPRMC,
-        gptre: void,
-        gptrf: void,
-        gpstn: void,
-        gpvbw: void,
-        gpwpl: void,
-        gpxte: void,
-        gpzda: void,
-
-        pub const table = init: {
-            const tags = std.meta.fields(Tag);
-
-            var list: [tags.len]struct { []const u8, Tag } = undefined;
-
-            for (tags, 0..) |tag, i| {
-                var name: [tag.name.len + 1]u8 = undefined;
-                name[0] = '$';
-
-                _ = std.ascii.upperString(name[1..], tag.name);
-
-                // can't have references to comptime var.
-                const key = name;
-
-                list[i] = .{ &key, @field(Tag, tag.name) };
-            }
-
-            break :init std.StaticStringMap(Tag).initComptime(list);
-        };
+    pub const Sentence = struct {
+        talker: Talker,
+        format: Format,
 
         pub fn parse(buffer: []const u8) !Sentence {
             var it = std.mem.splitScalar(u8, buffer, ',');
 
+            if (buffer.len == 0 or buffer[0] != '$') return error.InvalidSentence;
+
             const cmd = it.first();
-            const tag = Sentence.table.get(cmd).?;
+            const tag = Format.table.get(cmd[3..6]) orelse return error.InvalidFormat;
 
             switch (tag) {
                 inline else => |t| {
-                    const Payload = @FieldType(Sentence, @tagName(t));
+                    const Payload = @FieldType(Format, @tagName(t));
                     if (Payload == void) return error.NotImplemented;
 
                     const payload = try Payload.parse(it.buffer[it.index.?..]);
 
-                    return @unionInit(Sentence, @tagName(t), payload);
+                    const talker = Talker.table.get(cmd[1..3]) orelse return error.InvalidTalker;
+                    const format = @unionInit(Format, @tagName(t), payload);
+
+                    return .{ .talker = talker, .format = format };
                 },
             }
         }
     };
 
-    fn daysSinceEpoch(year: std.time.epoch.Year, month: std.time.epoch.Month, days: u5) u64 {
-        // CREDIT: https://howardhinnant.github.io/date_algorithms.html
-        // made a few tweaks with the guarantee that year cannot be before 1970.
+    pub const Talker = enum {
+        gp,
+        gn,
+        gl,
+        ga,
+        gb,
+        gq,
 
-        // NOTE: Days since epoch. Not before.
-        std.debug.assert(year >= 1970);
+        const table = init: {
+            const tags = std.meta.fields(Talker);
 
-        const y = year - @intFromBool(@intFromEnum(month) <= 2);
+            var list: [tags.len]struct { []const u8, Talker } = undefined;
 
-        const era: u64 = y / 400;
-        const yoe: u64 = y - era * 400;
+            for (tags, 0..) |tag, i| {
+                var name: [tag.name.len]u8 = undefined;
+                _ = std.ascii.upperString(&name, tag.name);
 
-        const mon: u64 = @intCast(@intFromEnum(month) + if (@intFromEnum(month) > 2) @as(i64, -3) else @as(i64, 9));
-        const doy: u64 = (153 * mon + 2) / 5 + days - 1;
-        const doe: u64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                const key = name;
+                list[i] = .{ &key, @field(Talker, tag.name) };
+            }
 
-        return era * 146097 + doe - 719468;
+            break :init std.StaticStringMap(Talker).initComptime(list);
+        };
+    };
+
+    pub const Format = union(enum) {
+        const Tag = std.meta.Tag(Format);
+
+        bod: void,
+        bwc: void,
+        gga: void,
+        gll: void,
+        gsa: void,
+        gsv: void,
+        hdt: void,
+        r00: void,
+        rma: void,
+        rmb: void,
+        rmc: RMC,
+        tre: void,
+        trf: void,
+        stn: void,
+        vbw: void,
+        wpl: void,
+        xte: void,
+        zda: void,
+
+        const table = init: {
+            const tags = std.meta.fields(Tag);
+
+            var list: [tags.len]struct { []const u8, Tag } = undefined;
+
+            for (tags, 0..) |tag, i| {
+                var name: [tag.name.len]u8 = undefined;
+                _ = std.ascii.upperString(&name, tag.name);
+
+                const key = name;
+                list[i] = .{ &key, @field(Tag, tag.name) };
+            }
+
+            break :init std.StaticStringMap(Tag).initComptime(list);
+        };
+    };
+};
+
+pub const RMC = struct {
+    // TODO: we should always have a status.
+    status: ?enum { valid, warning } = null,
+    time: ?std.Io.Timestamp = null,
+    date: ?std.Io.Timestamp = null,
+    location: ?Gps.Location = null,
+
+    pub fn parse(buffer: []const u8) !RMC {
+        var rmc: RMC = .{};
+
+        var it = std.mem.splitScalar(u8, buffer, ',');
+
+        var state: enum {
+            time,
+            status,
+            lat,
+            lat_dir,
+            lon,
+            lon_dir,
+            speed_knots,
+            heading,
+            date,
+        } = .time;
+
+        var lat: ?Gps.Latitude = null;
+        var lon: ?Gps.Longitude = null;
+
+        while (it.next()) |slice| switch (state) {
+            .time => {
+                state = .status;
+                // TODO: we need to handle having a non-empty column but invalid time.
+                if (slice.len < 6) continue;
+
+                // TODO: let's just hope that we have digits.
+                const h: i96 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
+                const m: i96 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
+                const s: i96 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
+
+                const millis = if (slice.len >= 6 and slice[6] == '.')
+                    try std.fmt.parseInt(i96, slice[7..], 10)
+                else
+                    0;
+
+                rmc.time = .{ .nanoseconds = (h * std.time.ns_per_hour) + (m * std.time.ns_per_min) + (s * std.time.ns_per_s) + (millis * std.time.ns_per_ms) };
+            },
+            .status => {
+                state = .lat;
+                if (slice.len == 0) return error.MissingStatus;
+
+                rmc.status = switch (slice[0]) {
+                    'V' => .warning,
+                    'A' => .valid,
+                    else => null,
+                };
+            },
+            .lat => {
+                state = .lat_dir;
+                if (slice.len == 0) continue;
+
+                lat = try Gps.Latitude.parse(slice);
+            },
+            .lat_dir => {
+                state = .lon;
+                if (slice.len == 0) {
+                    if (lat != null) return error.InvalidDirection;
+                    continue;
+                }
+
+                lat.?.y *= switch (slice[0]) {
+                    'S' => -1.0,
+                    'N' => 1.0,
+                    else => return error.InvalidDirection,
+                };
+            },
+            .lon => {
+                state = .lon_dir;
+                if (slice.len == 0) continue;
+
+                lon = try Gps.Longitude.parse(slice);
+            },
+            .lon_dir => {
+                state = .speed_knots;
+                if (slice.len == 0) {
+                    if (lon != null) return error.InvalidDirection;
+                    continue;
+                }
+
+                lon.?.x *= switch (slice[0]) {
+                    'W' => -1.0,
+                    'E' => 1.0,
+                    else => return error.InvalidDirection,
+                };
+            },
+            .speed_knots => {
+                // TODO: this should probably go in .lon_dir.
+                if ((lat == null) != (lon == null)) {
+                    return error.InvalidDirection;
+                } else if (lat != null and lon != null) {
+                    rmc.location = .{ .lat = lat.?, .lon = lon.? };
+                }
+
+                // TODO: implement.
+                state = .heading;
+            },
+            .heading => {
+                // TODO: implement.
+                state = .date;
+            },
+            .date => {
+                // TODO: there are more fields after this.
+                if (slice.len == 0) break;
+                if (slice.len != 6) return error.InvalidUTCDate;
+
+                // TODO: let's just hope we have digits.
+                const y: u16 = @intCast((slice[4] - '0') * 10 + slice[5] - '0');
+                const m: u4 = @intCast((slice[2] - '0') * 10 + slice[3] - '0');
+                const d: u5 = @intCast((slice[0] - '0') * 10 + slice[1] - '0');
+
+                rmc.date = .{
+                    // NOTE: we only handle years after 2000. This is because we do not live in the 90s anymore.
+                    .nanoseconds = @intCast(daysSinceEpoch(y + 2000, @enumFromInt(m), d) * std.time.ns_per_day),
+                };
+            },
+        };
+
+        return rmc;
     }
 };
+
+fn daysSinceEpoch(year: std.time.epoch.Year, month: std.time.epoch.Month, days: u5) u64 {
+    // CREDIT: https://howardhinnant.github.io/date_algorithms.html
+    // made a few tweaks with the guarantee that year cannot be before 1970.
+
+    // NOTE: Days since epoch. Not before.
+    std.debug.assert(year >= 1970);
+
+    const y = year - @intFromBool(@intFromEnum(month) <= 2);
+
+    const era: u64 = y / 400;
+    const yoe: u64 = y - era * 400;
+
+    const mon: u64 = @intCast(@intFromEnum(month) + if (@intFromEnum(month) > 2) @as(i64, -3) else @as(i64, 9));
+    const doy: u64 = (153 * mon + 2) / 5 + days - 1;
+    const doe: u64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+
+    return era * 146097 + doe - 719468;
+}
 
 pub const Radio = struct {
     // NOTE: Semtech for some reason decided to store the radio configuration in global static state.
@@ -665,24 +695,28 @@ test "warning gprmc" {
     const buffer = "$GPRMC,193131.000,V,,,,,0.58,168.81,280720,,,*4A ";
     const sentence: nmea.Sentence = try .parse(buffer);
 
-    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 70291000000000 }, sentence.gprmc.time);
-    try std.testing.expectEqual(.warning, sentence.gprmc.status);
-    try std.testing.expectEqual(null, sentence.gprmc.location);
-    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 1595894400000000000 }, sentence.gprmc.date);
+    const format = sentence.format.rmc;
+
+    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 70291000000000 }, format.time);
+    try std.testing.expectEqual(.warning, format.status);
+    try std.testing.expectEqual(null, format.location);
+    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 1595894400000000000 }, format.date);
 }
 
 test "valid gprmc" {
     const buffer = "$GPRMC,192921.000,A,4458.1690,N,09331.0392,W,0.01,36.57,280720,,,*43";
     const sentence: nmea.Sentence = try .parse(buffer);
 
-    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 70161000000000 }, sentence.gprmc.time);
-    try std.testing.expectEqual(.valid, sentence.gprmc.status);
+    const format = sentence.format.rmc;
+
+    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 70161000000000 }, format.time);
+    try std.testing.expectEqual(.valid, format.status);
 
     // TODO: approxEqual
-    try std.testing.expectEqual(Gps.Latitude{ .y = 44.969483333333336 }, sentence.gprmc.location.?.lat);
-    try std.testing.expectEqual(Gps.Longitude{ .x = -93.51732 }, sentence.gprmc.location.?.lon);
+    try std.testing.expectEqual(Gps.Latitude{ .y = 44.969483333333336 }, format.location.?.lat);
+    try std.testing.expectEqual(Gps.Longitude{ .x = -93.51732 }, format.location.?.lon);
 
-    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 1595894400000000000 }, sentence.gprmc.date);
+    try std.testing.expectEqual(std.Io.Timestamp{ .nanoseconds = 1595894400000000000 }, format.date);
 }
 
 test "longitude dms - valid" {
