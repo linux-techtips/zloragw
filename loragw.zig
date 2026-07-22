@@ -266,6 +266,7 @@ pub const nmea = struct {
         trf: void,
         stn: void,
         vbw: void,
+        vtg: void,
         wpl: void,
         xte: void,
         zda: void,
